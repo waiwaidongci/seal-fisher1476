@@ -11,6 +11,7 @@
 - 试封方案、工艺计数录入/编辑/删除；重名记录与非法数值明确拒绝。
 - Fisher精确检验、Wilson单比例区间与率差。两组试件独立，组别预先固定。双侧 p 值是固定边际下概率不大于观察表的所有表之和。
 - 每次运行冻结参数、观测和SHA256。Redis任务由独立worker计算，写DB与共享产物卷；输入修改不会改写历史结果。
+- 研究系列共享显著性额度：反复试封挑显著结果会放大误判风险，系列内研究共用一份显著性总额。首项研究发起后总额锁定；每次研究先预占所用检验阈值，预占与已用之和不超总额，检验按预占阈值判定；结果在任何入口可见前转为已用，已公开额度永不退回，未公开失败或取消可释放额度；取消与计算完成并发时迟归结果不复活已退款研究；重试沿用原研究不重复扣额，排队中断恢复不漏扣。额度台账记录每次变化原因。
 - 负责人复核不可覆盖；审计记录登录、数据改动、排队、复核与导出；240请求/分钟限流、全局可恢复错误。
 
 ## 快速启动
@@ -39,6 +40,16 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 seed提供3次试验×2个工艺组，共6条汇总计数，代表600份独立试件。每次运行每组只允许一条预聚合记录；修正计数应编辑原记录，重复组会明确失败。
 
+## 研究系列与共享显著性额度
+“研究系列”页可建立系列（名称+共享显著性总额，0.001–1）、发起研究、取消研究，并展示额度台账（每次额度变化的原因、变动后已用/预占快照）。
+
+- 总额在首项研究发起（首次预占）后锁定，此前可调整；锁定后拒绝修改。
+- 发起研究时预占本次检验阈值 α（0.001–0.2，留空则抢占全部剩余、上限0.2）；预占与已用之和不得超过总额，检验按预占阈值判定。预占、锁定、判定在同一事务内经系列行 `SELECT ... FOR UPDATE` 串行化，并发预占不会超支。
+- worker 完成计算后，在同一事务内先把预占转为已用、写入台账，再公开结果；已公开（completed）额度永不退回，取消/重试均拒绝。未公开的失败或取消释放预占额度。
+- 取消与计算完成并发：两者按“系列行→研究行”固定顺序加锁；若取消先提交，迟归结果在提交前发现研究已退款（budget_state≠reserved）即丢弃，已取消研究不会被复活。
+- 重试仅适用于 failed/cancelled 研究，沿用原研究记录、原快照与原阈值；额度已释放的按原阈值重新预占（剩余不足则拒绝），仍持有预占的中断场景不重复扣额。worker 重启时将 queued/running 且持有预占的系列研究重新入队，额度保持预占不漏扣。
+- 系列研究经同一 Redis 队列以 `series:{id}` 消息计算，独立研究（ExactRun）消息与行为保持原样，不触碰任何系列额度。
+
 ## 技术与目录
 |部分|实现|
 |---|---|
@@ -52,7 +63,7 @@ seed提供3次试验×2个工艺组，共6条汇总计数，代表600份独立�
 
 环境变量 `.env.example`：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、DB_PASSWORD、JWT_SECRET、SEED_DEMO。开发时在本地venv安装backend/requirements.txt，设置DATABASE_URL、REDIS_URL、JWT_SECRET再运行uvicorn；前端开发经Nginx代理 `/api/` 到不带前缀的API。
 
-共享枚举：角色admin/analyst/viewer和队列queued/running/completed/failed；后端`src/constants/enums.py`、认证与worker使用相同值；前端`src/types/enums.js`、状态与角色界面使用相同值。Google Fonts：Noto Serif SC + IBM Plex Mono；断网使用serif/monospace回退。
+共享枚举：角色admin/analyst/viewer和队列queued/running/completed/failed/cancelled；后端`src/constants/enums.py`、认证与worker使用相同值；前端`src/types/enums.js`、状态与角色界面使用相同值。Google Fonts：Noto Serif SC + IBM Plex Mono；断网使用serif/monospace回退。
 
 ## 算法输入、失败态与复现
 输入为选定批次全部观测和参数，输出核心数值、明细、解释；参数经后端严格白名单和范围验证。两组试件独立，组别预先固定。双侧 p 值是固定边际下概率不大于观察表的所有表之和。。空批次拒绝；不完整字段/非有限数/非法计数拒绝；常量相关列与不足样本使任务failed并保留错误。固定seed42、输入checksum相同可复现。独立oracle：2×2固定边际对scipy fisher_exact；零格与计数非法拒绝。

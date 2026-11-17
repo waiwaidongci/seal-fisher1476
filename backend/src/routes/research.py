@@ -8,6 +8,7 @@ from src.schemas.study import StudyInput
 from src.schemas.observation import ObservationInput
 from src.schemas.run import RunInput
 from src.schemas.review import ReviewInput
+from src.schemas.series import SeriesInput,SeriesBudgetInput,SeriesStudyInput
 from src.controllers import research
 from src.services import runs,studies
 from src.models.audit import Audit
@@ -45,5 +46,17 @@ def review(id:int,data:ReviewInput,db=Depends(get_db),user=Depends(admin)): retu
 @router.get('/runs/{id}/export')
 def export(id:int,db=Depends(get_db),user=Depends(current_user)):
     return Response(content=runs.export(db,id,user).encode('utf-8'),media_type='text/csv',headers={'Content-Disposition':f'attachment; filename="research-{id}.csv"'})
+@router.get('/series')
+def list_series(db=Depends(get_db),user=Depends(current_user)): return research.list_series(db)
+@router.post('/series')
+def create_series(data:SeriesInput,db=Depends(get_db),user=Depends(writer)): return research.create_series(db,data,user)
+@router.put('/series/{id}')
+def update_series(id:int,data:SeriesBudgetInput,db=Depends(get_db),user=Depends(writer)): return research.update_series(db,id,data,user)
+@router.post('/series/{id}/studies')
+def start_series_study(id:int,data:SeriesStudyInput,db=Depends(get_db),user=Depends(writer)): return research.start_series_study(db,id,data,user)
+@router.post('/series-studies/{id}/cancel')
+def cancel_series_study(id:int,db=Depends(get_db),user=Depends(writer)): return research.cancel_series_study(db,id,user)
+@router.post('/series-studies/{id}/retry')
+def retry_series_study(id:int,db=Depends(get_db),user=Depends(writer)): return research.retry_series_study(db,id,user)
 @router.get('/audits')
 def audits(db=Depends(get_db),user=Depends(current_user)): return [record(x) for x in db.scalars(select(Audit).order_by(Audit.id.desc()).limit(100))]
